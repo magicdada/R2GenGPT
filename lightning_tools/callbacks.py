@@ -1,8 +1,8 @@
 import os
-from lightning.pytorch.loggers import CSVLogger
-from lightning.pytorch import loggers as pl_loggers
-from lightning.pytorch.callbacks import LearningRateMonitor
-from lightning.pytorch.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 
 def add_callbacks(args):

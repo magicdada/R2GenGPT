@@ -1,4 +1,4 @@
-from lightning.pytorch import LightningDataModule
+from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 from dataset.data_helper import create_datasets
 
@@ -52,8 +52,11 @@ class DataModule(LightningDataModule):
         Use this method to generate the train dataloader. Usually you just wrap the dataset you defined in setup.
         :return:
         """
+        # loader = DataLoader(self.dataset["train"], batch_size=self.args.batch_size, drop_last=True, pin_memory=True,
+        #                 num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor)
         loader = DataLoader(self.dataset["train"], batch_size=self.args.batch_size, drop_last=True, pin_memory=True,
-                        num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor)
+                            num_workers=self.args.num_workers,
+                            prefetch_factor=self.args.prefetch_factor if self.args.num_workers > 0 else None)
         return loader
 
 
@@ -62,12 +65,16 @@ class DataModule(LightningDataModule):
         Use this method to generate the val dataloader. Usually you just wrap the dataset you defined in setup.
         :return:
         """
+        # loader = DataLoader(self.dataset["validation"], batch_size=self.args.val_batch_size, drop_last=False, pin_memory=True,
+        #                     num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor)
         loader = DataLoader(self.dataset["validation"], batch_size=self.args.val_batch_size, drop_last=False, pin_memory=True,
-                            num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor)
+                            num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor if self.args.num_workers > 0 else None)
         return loader
 
 
     def test_dataloader(self):
+        # loader = DataLoader(self.dataset["test"], batch_size=self.args.test_batch_size, drop_last=False, pin_memory=False,
+        #                 num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor)
         loader = DataLoader(self.dataset["test"], batch_size=self.args.test_batch_size, drop_last=False, pin_memory=False,
-                        num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor)
+                        num_workers=self.args.num_workers, prefetch_factor=self.args.prefetch_factor if self.args.num_workers > 0 else None)
         return loader

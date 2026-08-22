@@ -2,16 +2,14 @@ import os
 import json
 import torch
 import torch.nn as nn
-import lightning.pytorch as pl
-from transformers import LlamaForCausalLM, LlamaTokenizer
+import pytorch_lightning as pl
+from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig
 from evalcap.bleu.bleu import Bleu
 from evalcap.rouge.rouge import Rouge
 from evalcap.cider.cider import Cider
-from evalcap.meteor.meteor import Meteor
+from nltk.translate.meteor_score import meteor_score as nltk_meteor
 from transformers import SwinModel
-from lightning_tools.optim import config_optimizer
 from peft import get_peft_model, LoraConfig, TaskType
-import pdb
 
 
 
@@ -48,11 +46,28 @@ class R2GenGPT(pl.LightningModule):
         print('Loading LLAMA')
         self.llama_tokenizer = LlamaTokenizer.from_pretrained(args.llama_model, use_fast=False)
         self.llama_tokenizer.pad_token_id = 0
+        # if args.low_resource:
+        #     self.llama_model = LlamaForCausalLM.from_pretrained(
+        #         args.llama_model,
+        #         torch_dtype=torch.float16,
+        #         load_in_8bit=True,
+        #         device_map="auto"
+        #     )
+        # else:
+        #     self.llama_model = LlamaForCausalLM.from_pretrained(
+        #         args.llama_model,
+        #         torch_dtype=torch.float16,
+        #     )
         if args.low_resource:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+            )
             self.llama_model = LlamaForCausalLM.from_pretrained(
                 args.llama_model,
-                torch_dtype=torch.float16,
-                load_in_8bit=True,
+                quantization_config=bnb_config,
                 device_map="auto"
             )
         else:
@@ -89,16 +104,31 @@ class R2GenGPT(pl.LightningModule):
             print(f'Load checkpoint from {args.delta_file}')
 
 
+    # def score(self, ref, hypo):
+    #     """
+    #     ref, dictionary of reference sentences (id, sentence)
+    #     hypo, dictionary of hypothesis sentences (id, sentence)
+    #     score, dictionary of scores
+    #     """
+    #     scorers = [
+    #         (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
+    #         (Rouge(), "ROUGE_L"),
+    #         (Meteor(), "METEOR"),
+    #         (Cider(), "CIDEr")
+    #     ]
+    #     final_scores = {}
+    #     for scorer, method in scorers:
+    #         score, scores = scorer.compute_score(ref, hypo)
+    #         if type(score) == list:
+    #             for m, s in zip(method, score):
+    #                 final_scores[m] = s
+    #         else:
+    #             final_scores[method] = score
+    #     return final_scores
     def score(self, ref, hypo):
-        """
-        ref, dictionary of reference sentences (id, sentence)
-        hypo, dictionary of hypothesis sentences (id, sentence)
-        score, dictionary of scores
-        """
         scorers = [
             (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
             (Rouge(), "ROUGE_L"),
-            (Meteor(), "METEOR"),
             (Cider(), "CIDEr")
         ]
         final_scores = {}
@@ -109,6 +139,15 @@ class R2GenGPT(pl.LightningModule):
                     final_scores[m] = s
             else:
                 final_scores[method] = score
+
+        # METEOR using nltk
+        meteor_scores = []
+        for key in ref:
+            ref_text = ref[key][0].split()
+            hypo_text = hypo[key][0].split()
+            meteor_scores.append(nltk_meteor([ref_text], hypo_text))
+        final_scores["METEOR"] = sum(meteor_scores) / len(meteor_scores)
+
         return final_scores
 
 

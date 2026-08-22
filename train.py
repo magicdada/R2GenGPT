@@ -4,8 +4,8 @@ from configs.config import parser
 from dataset.data_module import DataModule
 from lightning_tools.callbacks import add_callbacks
 from models.R2GenGPT import R2GenGPT
-from lightning.pytorch import seed_everything
-import lightning.pytorch as pl
+from pytorch_lightning import seed_everything
+import pytorch_lightning as pl
 
  
 def train(args):
@@ -18,6 +18,8 @@ def train(args):
         strategy=args.strategy,
         accelerator=args.accelerator,
         precision=args.precision,
+        enable_model_summary=False,
+        check_val_every_n_epoch=3,
         val_check_interval = args.val_check_interval,
         limit_val_batches = args.limit_val_batches,
         max_epochs = args.max_epochs,
