@@ -417,7 +417,7 @@ class OcclusionExplainer:
 # 模型加载与生成
 def load_model():
     global model, image_processor, explainer
-    print("正在加载模型...")
+    print("Start loading model......")
 
     args = Namespace(
         vision_model=SWIN_MODEL, llama_model=LLAMA_MODEL,
@@ -442,9 +442,9 @@ def load_model():
 
     if ENABLE_HEATMAP:
         explainer = OcclusionExplainer(model, image_processor, DEVICE, GRID, BATCH)
-        print(f"热力图已启用：遮挡法 {GRID}x{GRID} 网格，批 {BATCH}")
+        print(f"Heatmap enabled: occlusion method {GRID}x{GRID} grid, batch {BATCH}")
 
-    print("模型加载完成！")
+    print("Model loaded successfully!")
 
 
 @torch.no_grad()
