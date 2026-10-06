@@ -5,10 +5,7 @@ R2GenGPT 推理API服务
 热力图方法: 保留式遮挡（因果扰动）
     只保留影像的一小块、其余置为数据集均值, 用 teacher forcing 重算已生成报告的
     log-likelihood。某块单独能把报告恢复得越多, 说明模型说出这段话越依赖它。
-
     测的是因果依赖而非模型内部中间量, 所以不受注意力伪影影响。
-    之前用 LLaMA 跨模态注意力做过一版, 实测存在按 token 序号周期交替的排布伪影,
-    且不同患者之间热力图结构几乎一致, 已弃用。
 
 显示闸门（重要）:
     只有报告里抽到阳性病名时才出词级热力图。阴性报告不出图 ——
@@ -55,7 +52,6 @@ model = None
 image_processor = None
 explainer = None
 
-
 # 报告文本解析
 CHEXPERT_LEXICON: Dict[str, List[str]] = {
     "Atelectasis": [r"atelecta\w*"],
@@ -76,29 +72,34 @@ CHEXPERT_LEXICON: Dict[str, List[str]] = {
     "Emphysema": [r"emphysema\w*", r"hyperinflat\w*"],
     "Scarring": [r"scarring", r"fibro\w*"],
     "Calcification": [r"calcifi\w*", r"granuloma\w*"],
+
+    "Degenerative Change": [r"degenerat\w*", r"spondylo\w*", r"osteophyt\w*",
+                            r"disc\s+space\s+narrowing"],
+    "Spine Deformity": [r"kyphos\w*", r"scolios\w*", r"lordos\w*"],
+    "Surgical Change": [r"\bfusion\b", r"surgical\s+clip\w*",
+                        r"post[\s\-]?surgical", r"post[\s\-]?operative"],
+    "Hypoinflation": [r"hypoinflat\w*", r"low\s+lung\s+volumes?"],
+    "Atherosclerosis": [r"atherosclero\w*", r"vascular\s+calcification"],
 }
 
 # 否定线索。不能用固定字符窗口: 报告里常见一个否定词管一串病名
-# ("no focal consolidation pneumothorax or large pleural effusion"), 窗口开小了会漏
-# 掉最后一个。按句子边界判断, 不设长度上限。
 _NEG_CUE = re.compile(
     r"\b(no|not|without|free\s+of|absence\s+of|negative\s+for|clear\s+of|"
     r"unremarkable|resolution\s+of|rule\s+out|denies)\b", re.IGNORECASE)
 
 # 正常性表述。这类是后置修饰, 出现在病名"后面"
-# ("the cardiomediastinal silhouette ... are within normal limits"),
-# 所以整句任意位置命中都要排除, 只查前缀不够。
 _NORMAL_CUE = re.compile(
     r"within\s+normal\s+limits|(?:is|are|appears?)\s+(?:grossly\s+)?normal|"
     r"normal\s+in\s+(?:size|caliber|configuration|appearance)|unremarkable|"
     r"grossly\s+normal|no\s+evidence\s+of", re.IGNORECASE)
 
-# 词表覆盖不到但明显在描述异常的措辞。命中说明报告不是纯阴性,
-# 只是无法归到具体病名 —— 这种情况不能当正常处理。
+# 异常征象词表(未归类到具体病名但明显是异常描述的词)
 _ABNORMAL_CUE = re.compile(
     r"\babnormal\w*|increased?|decreased?|prominen\w*|suspicious|concerning|"
     r"worsen\w*|progress\w*|irregular|blunt\w*|elevat\w*|deviat\w*|\bnew\b|"
-    r"interval\s+change|ill[-\s]defined|asymmetr\w*", re.IGNORECASE)
+    r"interval\s+change|ill[-\s]defined|asymmetr\w*|"
+    r"flatten\w*|hyperlucen\w*|hazy|haziness",
+    re.IGNORECASE)
 
 _SENT_END = ".;\n"
 _PATTERNS = {k: [re.compile(p, re.IGNORECASE) for p in v]
@@ -112,7 +113,6 @@ def _sentence(text: str, pos: int) -> Tuple[int, int]:
 
 
 def is_negated(text: str, kw_start: int) -> bool:
-    """病名是否处于阴性语境: 同句中前面有否定词, 或整句有正常性表述"""
     s, e = _sentence(text, kw_start)
     return bool(_NEG_CUE.search(text[s:kw_start]) or _NORMAL_CUE.search(text[s:e]))
 
@@ -149,7 +149,6 @@ def assess(text: str, hits: List[Dict]) -> Tuple[str, str]:
     return "normal", "未检出阳性描述"
 
 
-# 病名 -> Impression 用语。用规范表述，不直接抄 Findings 的原文
 IMPRESSION_TERMS: Dict[str, str] = {
     "Atelectasis": "atelectasis",
     "Cardiomegaly": "cardiomegaly",
@@ -167,12 +166,17 @@ IMPRESSION_TERMS: Dict[str, str] = {
     "Emphysema": "pulmonary hyperinflation, suggesting emphysema",
     "Scarring": "pulmonary scarring/fibrosis",
     "Calcification": "calcified granuloma",
+    "Degenerative Change": "degenerative changes of the spine",
+    "Spine Deformity": "spinal curvature deformity",
+    "Surgical Change": "post-surgical changes",
+    "Hypoinflation": "diminished lung volumes",
+    "Atherosclerosis": "atherosclerotic vascular changes",
 }
 
 
 def build_impression(status: str, hits: List[Dict]) -> str:
     """
-    从 Findings 里抽到的病名生成 Impression 草稿。
+    从 Findings 里抽到的病名生成 Impression 草稿
 
     不能写死: Impression 是临床医生真正阅读的结论段, 写死会与模型生成的 Findings
     直接矛盾(阳性 Findings 配"未见异常"的 Impression)。这里由同一批抽取结果推导,
@@ -214,8 +218,8 @@ def _normalize(m: np.ndarray) -> np.ndarray:
 
 
 def render_overlay(image: Image.Image, grid_map: np.ndarray, out_size: int = 448,
-                   alpha: float = 0.5, floor: float = 0.15) -> str:
-    """把网格热力图叠到原图, 返回 base64 PNG（不含 data URI 前缀）"""
+                   alpha: float = 0.65, floor: float = 0.1) -> str:
+    """把网格热力图叠到原图, 返回 base64 PNG"""
     base = image.convert("RGB")
     w, h = base.size
     scale = out_size / max(w, h)
@@ -494,7 +498,7 @@ async def predict(
     heatmap: bool = True,
 ):
     """
-    接收正位/侧位影像（1~2 张，按顺序视为 frontal / lateral），生成报告和热力图。
+    接收正位/侧位影像，生成报告和热力图。
 
     热力图约需 GRID^2 x 影像数 次前向，双图 7x7 约 13 秒。不需要时传 heatmap=false。
     """
@@ -519,13 +523,13 @@ async def predict(
         status_code, _ = assess(report_text, hits)
 
         resp = {
-            "report": report_text,         # 兼容旧字段，内容等于 Findings
-            "findings_text": report_text,  # Findings 段：模型生成
-            "impression": build_impression(status_code, hits),  # 需医师复核
+            "report": report_text,
+            "findings_text": report_text,
+            "impression": build_impression(status_code, hits),
             "impression_source": "derived",
             "views": views,
             "status": "success",
-            "heatmap_path": "",          # 兼容旧字段
+            "heatmap_path": "",
         }
 
         if heatmap and explainer is not None:
